@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+
+{% block title %}Discord Russia{% endblock %}
+
+{% block content %}
+<div id="app" class="app-container">
+    <!-- Список серверов -->
+    <div class="servers-sidebar">
+        <div class="server-icon home-icon" data-tooltip="Личные сообщения" onclick="app.showDMs()">
+            <i class="fab fa-discord"></i>
+        </div>
+        <div class="sidebar-separator"></div>
+        <div id="servers-list"></div>
+        <div class="server-icon add-server" data-tooltip="Добавить сервер" onclick="app.showCreateServerModal()">
+            <i class="fas fa-plus"></i>
+        </div>
+        <div class="server-icon join-server" data-tooltip="Присоединиться" onclick="app.showJoinServerModal()">
+            <i class="fas fa-compass"></i>
+        </div>
+    </div>
+    
+    <!-- Боковая панель каналов -->
+    <div class="channels-sidebar">
+        <div class="server-header" id="server-header">
+            <span class="server-name">Личные сообщения</span>
+            <i class="fas fa-chevron-down"></i>
+        </div>
+        
+        <div class="channels-container" id="channels-container">
+            <!-- Каналы/ЛС загружаются динамически -->
+        </div>
+        
+        <!-- Список друзей (показывается когда открыты ЛС) -->
+        <div class="friends-sidebar" id="friends-sidebar" style="display: none;">
+            <div class="friends-header">
+                <h3>Друзья</h3>
+                <button class="friends-add-btn" onclick="app.showAddFriendModal()" title="Добавить друга">
+                    <i class="fas fa-user-plus"></i>
+                </button>
+            </div>
+            <div class="friends-list" id="friends-list-sidebar">
+                <!-- Список друзей загружается динамически -->
+            </div>
+        </div>
+        
+        <div class="user-panel">
+            <div class="user-info" onclick="app.showUserSettings(event)">
+                <div class="avatar-wrapper">
+                    <img id="user-avatar" src="" alt="Avatar" class="user-avatar">
+                    <span id="user-status-indicator" class="status-indicator"></span>
+                </div>
+                <div class="user-details">
+                    <span id="user-name" class="username"></span>
+                    <span id="user-tag" class="user-tag"></span>
+                </div>
+            </div>
+            <div class="user-controls">
+                <button class="control-btn" id="mute-btn" data-tooltip="Отключить микрофон" onclick="app.toggleMute()">
+                    <i class="fas fa-microphone"></i>
+                </button>
+                <button class="control-btn" id="deafen-btn" data-tooltip="Отключить звук" onclick="app.toggleDeafen()">
+                    <i class="fas fa-headphones"></i>
+                </button>
+                <button class="control-btn" data-tooltip="Настройки" onclick="app.showSettings()">
+                    <i class="fas fa-cog"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Основная область -->
+    <div class="main-content">
+        <!-- Уведомление о неподтверждённой почте -->
+        <div class="email-verification-banner" id="email-verification-banner" style="display: none;">
+            <div class="banner-content">
+                <i class="fas fa-exclamation-circle"></i>
+                <span>Для того чтобы ваш профиль был не ограничен надо подтвердить вашу эл. почту</span>
+                <button class="btn btn-primary btn-sm" onclick="app.resendVerification(event)">Отправить подтверждение</button>
+            </div>
+            <button class="banner-close" onclick="app.closeEmailBanner()"><i class="fas fa-times"></i></button>
+        </div>
+        
+        <div class="channel-header" id="channel-header">
+            <div class="channel-info">
+                <span class="channel-icon"><i class="fas fa-hashtag"></i></span>
+                <span class="channel-name" id="current-channel-name">Выберите канал</span>
+                <span class="channel-topic" id="current-channel-topic"></span>
+            </div>
+            <div class="header-actions">
+                <button class="header-btn" data-tooltip="Закреплённые" onclick="app.showPinnedMessages()">
+                    <i class="fas fa-thumbtack"></i>
+                </button>
+                <button class="header-btn" data-tooltip="Участники" onclick="app.toggleMembersList()">
+                    <i class="fas fa-users"></i>
+                </button>
+                <div class="search-wrapper">
+                    <input type="text" placeholder="Поиск" class="search-input">
+                    <i class="fas fa-search"></i>
+                </div>
+            </div>
+        </div>
+        
+        <div class="content-wrapper">
+            <div class="messages-area" id="messages-area">
+                <div class="messages-container" id="messages-container">
+                    <div class="welcome-message" id="welcome-message">
+                        <h2>Добро пожаловать!</h2>
+                        <p>Выберите сервер и канал для начала общения</p>
+                    </div>
+                </div>
+                
+                <div class="typing-indicator" id="typing-indicator" style="display: none;">
+                    <span class="typing-dots"><span></span><span></span><span></span></span>
+                    <span id="typing-text"></span>
+                </div>
+                
+                <form class="message-form" id="message-form" style="display: none;">
+                    <div class="attachments-preview" id="attachments-preview"></div>
+                    <div class="reply-preview" id="reply-preview" style="display: none;">
+                        <span>Ответ на <strong id="reply-to-name"></strong></span>
+                        <button type="button" onclick="app.cancelReply()"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="message-input-wrapper">
+                        <button type="button" class="attach-btn" onclick="document.getElementById('file-input').click()">
+                            <i class="fas fa-plus-circle"></i>
+                        </button>
+                        <input type="file" id="file-input" multiple style="display: none;" onchange="app.handleFileSelect(event)">
+                        <textarea id="message-input" placeholder="Написать сообщение..." rows="1"></textarea>
+                        <div class="input-actions">
+                            <button type="button" class="emoji-btn" onclick="app.toggleEmojiPicker()">
+                                <i class="far fa-smile"></i>
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="members-sidebar" id="members-sidebar">
+                <div id="members-list"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальные окна -->
+<div class="modal-overlay" id="modal-overlay" onclick="app.closeModal()"></div>
+
+<!-- Модальное окно создания сервера -->
+<div class="modal" id="create-server-modal">
+    <div class="modal-header">
+        <h2>Создать сервер</h2>
+        <button class="modal-close" onclick="app.closeModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+        <div class="form-group">
+            <label>Название сервера</label>
+            <input type="text" id="new-server-name" placeholder="Мой крутой сервер">
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="app.closeModal()">Отмена</button>
+        <button class="btn btn-primary" onclick="app.createServer()">Создать</button>
+    </div>
+</div>
+
+<!-- Модальное окно присоединения к серверу -->
+<div class="modal" id="join-server-modal">
+    <div class="modal-header">
+        <h2>Присоединиться к серверу</h2>
+        <button class="modal-close" onclick="app.closeModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+        <div class="form-group">
+            <label>Ссылка-приглашение</label>
+            <input type="text" id="invite-code" placeholder="https://discord.gg/xxxxx или код">
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="app.closeModal()">Отмена</button>
+        <button class="btn btn-primary" onclick="app.joinServer()">Присоединиться</button>
+    </div>
+</div>
+
+<!-- Модальное окно настроек сервера -->
+<div class="modal modal-large" id="server-settings-modal">
+    <div class="modal-header">
+        <h2>Настройки сервера</h2>
+        <button class="modal-close" onclick="app.closeModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body settings-body">
+        <div class="settings-sidebar">
+            <div class="settings-nav-item active" data-section="overview">Обзор</div>
+            <div class="settings-nav-item" data-section="channels">Каналы</div>
+            <div class="settings-nav-item" data-section="roles">Роли</div>
+            <div class="settings-nav-item" data-section="members">Участники</div>
+            <div class="settings-nav-item" data-section="invites">Приглашения</div>
+            <div class="settings-separator"></div>
+            <div class="settings-nav-item danger" onclick="app.deleteServer()">Удалить сервер</div>
+        </div>
+        <div class="settings-content" id="server-settings-content">
+            <!-- Контент загружается динамически -->
+        </div>
+    </div>
+</div>
+
+
+<!-- Модальное окно создания канала -->
+<div class="modal" id="create-channel-modal">
+    <div class="modal-header">
+        <h2>Создать канал</h2>
+        <button class="modal-close" onclick="app.closeModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+        <div class="channel-type-selector">
+            <div class="channel-type active" data-type="text" onclick="app.selectChannelType('text')">
+                <i class="fas fa-hashtag"></i>
+                <div>
+                    <strong>Текстовый</strong>
+                    <p>Отправляйте сообщения, изображения и GIF</p>
+                </div>
+            </div>
+            <div class="channel-type" data-type="voice" onclick="app.selectChannelType('voice')">
+                <i class="fas fa-volume-up"></i>
+                <div>
+                    <strong>Голосовой</strong>
+                    <p>Общайтесь голосом и видео</p>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Название канала</label>
+            <input type="text" id="new-channel-name" placeholder="новый-канал">
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="app.closeModal()">Отмена</button>
+        <button class="btn btn-primary" onclick="app.createChannel()">Создать</button>
+    </div>
+</div>
+
+<!-- Emoji Picker -->
+<div class="emoji-picker" id="emoji-picker" style="display: none;">
+    <div class="emoji-picker-header">
+        <input type="text" placeholder="Поиск эмодзи" id="emoji-search">
+    </div>
+    <div class="emoji-picker-content" id="emoji-list">
+        <!-- Эмодзи загружаются динамически -->
+    </div>
+</div>
+
+<!-- Контекстное меню -->
+<div class="context-menu" id="context-menu" style="display: none;"></div>
+
+<!-- Уведомления -->
+<div class="notifications-container" id="notifications-container"></div>
+
+<!-- Модальное окно настроек -->
+<div class="modal-overlay" id="modal-overlay" onclick="app.closeModal()" style="display: none;"></div>
+<div class="modal settings-modal" id="user-settings-modal" style="display: none;">
+    <div class="modal-header">
+        <h2>Настройки пользователя</h2>
+        <button class="modal-close" onclick="app.closeModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="settings-container">
+        <div class="settings-nav">
+            <div class="settings-nav-item active" data-section="account" onclick="app.showSettingsSection('account')">
+                <i class="fas fa-user"></i> Мой аккаунт
+            </div>
+            <div class="settings-nav-item" data-section="friends" onclick="app.showSettingsSection('friends')">
+                <i class="fas fa-users"></i> Друзья
+            </div>
+            <div class="settings-nav-item" data-section="audio" onclick="app.showSettingsSection('audio')">
+                <i class="fas fa-headphones"></i> Аудио/Видео
+            </div>
+            <div class="settings-nav-item" data-section="security" onclick="app.showSettingsSection('security')">
+                <i class="fas fa-shield-alt"></i> Безопасность
+            </div>
+        </div>
+        <div class="settings-content" id="user-settings-content">
+            <!-- Контент загружается динамически -->
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно звонка -->
+<div class="call-modal" id="call-modal" style="display: none;">
+    <div class="call-video-container" id="call-video-container">
+        <video id="remote-video" autoplay playsinline></video>
+        <div class="local-video-container">
+            <video id="local-video" autoplay playsinline muted></video>
+        </div>
+        <div class="call-controls">
+            <button class="call-control-btn" id="mute-call-btn" onclick="app.toggleCallMute()">
+                <i class="fas fa-microphone"></i>
+            </button>
+            <button class="call-control-btn" id="video-call-btn" onclick="app.toggleCallVideo()">
+                <i class="fas fa-video"></i>
+            </button>
+            <button class="call-control-btn" id="screen-share-btn" onclick="app.toggleScreenShare()" title="Демонстрация экрана">
+                <i class="fas fa-desktop"></i>
+            </button>
+            <button class="call-control-btn end-call" onclick="app.endCall()">
+                <i class="fas fa-phone-slash"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно входящего звонка -->
+<div class="call-modal incoming-call" id="incoming-call-modal" style="display: none;">
+    <div class="call-content">
+        <div class="call-user-info" id="incoming-call-user">
+            <img src="" alt="User" id="incoming-call-avatar">
+            <h3 id="incoming-call-name"></h3>
+            <p>Входящий звонок</p>
+        </div>
+        <div class="call-buttons">
+            <button class="btn-call accept" onclick="app.acceptIncomingCall()">
+                <i class="fas fa-phone"></i>
+            </button>
+            <button class="btn-call decline" onclick="app.declineIncomingCall()">
+                <i class="fas fa-phone-slash"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+<script src="{{ url_for('static', filename='js/webrtc.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% endblock %}

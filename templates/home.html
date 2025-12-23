@@ -1,0 +1,564 @@
+{% extends "base.html" %}
+
+{% block title %}Discord Russia - Главная{% endblock %}
+
+{% block content %}
+<!-- Переключатель темы -->
+<button class="theme-toggle" id="theme-toggle" aria-label="Переключить тему">
+    <i class="fas fa-moon" id="theme-icon"></i>
+</button>
+
+<!-- Элемент для анимации пузыря -->
+<div class="bubble-animation" id="bubble-animation"></div>
+
+<div class="home-container" id="home-container">
+    <div class="home-hero">
+        <div class="hero-content">
+            <h1 class="hero-title animate-fade-in">Ваше место для общения</h1>
+            <p class="hero-subtitle animate-fade-in-delay">Создайте сервер для себя и своих друзей, где вы можете общаться, играть и просто проводить время вместе.</p>
+            <div class="hero-buttons animate-fade-in-delay-2">
+                {% if current_user.is_authenticated %}
+                    <a href="{{ url_for('app_main') }}" class="btn btn-primary btn-large">Открыть Discord</a>
+                {% else %}
+                    <a href="{{ url_for('register') }}" class="btn btn-primary btn-large">Зарегистрироваться</a>
+                    <a href="{{ url_for('login') }}" class="btn btn-secondary btn-large">Войти</a>
+                {% endif %}
+            </div>
+        </div>
+        <div class="hero-image animate-slide-in">
+            <div class="discord-preview">
+                <div class="preview-window">
+                    <div class="preview-sidebar"></div>
+                    <div class="preview-content">
+                        <div class="preview-message"></div>
+                        <div class="preview-message"></div>
+                        <div class="preview-message"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="features-section">
+        <div class="container">
+            <h2 class="section-title">Почему выбирают нас?</h2>
+            <div class="features-grid">
+                <div class="feature-card animate-fade-in">
+                    <div class="feature-icon">
+                        <i class="fas fa-comments"></i>
+                    </div>
+                    <h3>Общение в реальном времени</h3>
+                    <p>Общайтесь с друзьями через текстовые и голосовые каналы с минимальной задержкой</p>
+                </div>
+                <div class="feature-card animate-fade-in-delay">
+                    <div class="feature-icon">
+                        <i class="fas fa-video"></i>
+                    </div>
+                    <h3>Видеозвонки</h3>
+                    <p>Видеозвонки высокого качества с возможностью демонстрации экрана</p>
+                </div>
+                <div class="feature-card animate-fade-in-delay-2">
+                    <div class="feature-icon">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <h3>Серверы и сообщества</h3>
+                    <p>Создавайте серверы для своих сообществ и управляйте ими</p>
+                </div>
+                <div class="feature-card animate-fade-in-delay-3">
+                    <div class="feature-icon">
+                        <i class="fas fa-shield-alt"></i>
+                    </div>
+                    <h3>Безопасность</h3>
+                    <p>Двухфакторная аутентификация и защита ваших данных</p>
+                </div>
+                <div class="feature-card animate-fade-in-delay-4">
+                    <div class="feature-icon">
+                        <i class="fas fa-mobile-alt"></i>
+                    </div>
+                    <h3>Кроссплатформенность</h3>
+                    <p>Работает на всех устройствах - компьютере, телефоне и планшете</p>
+                </div>
+                <div class="feature-card animate-fade-in-delay-5">
+                    <div class="feature-icon">
+                        <i class="fas fa-paint-brush"></i>
+                    </div>
+                    <h3>Кастомизация</h3>
+                    <p>Настраивайте свой профиль, аватар и статус как вам нравится</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="cta-section">
+        <div class="container">
+            <h2>Готовы начать?</h2>
+            <p>Присоединяйтесь к миллионам пользователей по всему миру</p>
+            {% if not current_user.is_authenticated %}
+                <a href="{{ url_for('register') }}" class="btn btn-primary btn-large">Создать аккаунт</a>
+            {% else %}
+                <a href="{{ url_for('app_main') }}" class="btn btn-primary btn-large">Открыть приложение</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<style>
+body {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    height: auto !important;
+    min-height: 100vh !important;
+}
+
+.home-container {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #f0f4ff 0%, #e8f0ff 100%);
+    color: #2c2f33;
+    transition: background 1.2s cubic-bezier(0.4, 0, 0.2, 1),
+                color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.home-hero {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 80px 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    align-items: center;
+}
+
+.hero-content h1 {
+    font-size: 56px;
+    font-weight: 800;
+    margin-bottom: 20px;
+    line-height: 1.2;
+    color: inherit;
+    transition: color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hero-subtitle {
+    font-size: 20px;
+    margin-bottom: 40px;
+    opacity: 0.9;
+    line-height: 1.6;
+    color: inherit;
+    transition: color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hero-buttons {
+    display: flex;
+    gap: 16px;
+}
+
+.btn-large {
+    padding: 16px 32px;
+    font-size: 18px;
+}
+
+.hero-image {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.discord-preview {
+    width: 100%;
+    max-width: 500px;
+}
+
+.preview-window {
+    background: #36393f;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    display: flex;
+    height: 400px;
+    transition: background 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.preview-sidebar {
+    width: 80px;
+    background: #202225;
+    transition: background 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.preview-content {
+    flex: 1;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.preview-message {
+    height: 60px;
+    background: #2f3136;
+    border-radius: 8px;
+    animation: pulse 2s infinite;
+    transition: background 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+.features-section {
+    padding: 100px 20px;
+    background: white;
+    color: #2c2f33;
+    transition: background 1.2s cubic-bezier(0.4, 0, 0.2, 1),
+                color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.section-title {
+    text-align: center;
+    font-size: 48px;
+    font-weight: 700;
+    margin-bottom: 60px;
+    color: #23272a;
+    transition: color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 40px;
+}
+
+.feature-card {
+    text-align: center;
+    padding: 40px 20px;
+    border-radius: 12px;
+    background: transparent;
+    transition: transform 0.3s, box-shadow 0.3s,
+                background 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.feature-card:hover {
+    transform: translateY(-10px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+.feature-icon {
+    font-size: 48px;
+    color: #5865f2;
+    margin-bottom: 20px;
+}
+
+.feature-card h3 {
+    font-size: 24px;
+    margin-bottom: 12px;
+    color: #23272a;
+    transition: color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.feature-card p {
+    font-size: 16px;
+    color: #747f8d;
+    line-height: 1.6;
+    transition: color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cta-section {
+    padding: 100px 20px;
+    text-align: center;
+    background: #f6f6f6;
+    transition: background 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cta-section h2 {
+    font-size: 48px;
+    font-weight: 700;
+    margin-bottom: 20px;
+    color: #23272a;
+    transition: color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cta-section p {
+    font-size: 20px;
+    color: #747f8d;
+    margin-bottom: 40px;
+    transition: color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Анимации */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(50px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.animate-fade-in {
+    animation: fadeIn 0.8s ease-out;
+}
+
+.animate-fade-in-delay {
+    animation: fadeIn 0.8s ease-out 0.2s both;
+}
+
+.animate-fade-in-delay-2 {
+    animation: fadeIn 0.8s ease-out 0.4s both;
+}
+
+.animate-fade-in-delay-3 {
+    animation: fadeIn 0.8s ease-out 0.6s both;
+}
+
+.animate-fade-in-delay-4 {
+    animation: fadeIn 0.8s ease-out 0.8s both;
+}
+
+.animate-fade-in-delay-5 {
+    animation: fadeIn 0.8s ease-out 1s both;
+}
+
+.animate-slide-in {
+    animation: slideIn 1s ease-out;
+}
+
+@media (max-width: 768px) {
+    .home-hero {
+        grid-template-columns: 1fr;
+        text-align: center;
+    }
+    
+    .hero-content h1 {
+        font-size: 36px;
+    }
+    
+    .features-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Переключатель темы */
+.theme-toggle {
+    position: fixed;
+    top: 30px;
+    right: 30px;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: rgba(44, 47, 51, 0.2);
+    backdrop-filter: blur(10px);
+    border: 2px solid rgba(44, 47, 51, 0.3);
+    color: #2c2f33;
+    font-size: 24px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease,
+                background 1.2s cubic-bezier(0.4, 0, 0.2, 1),
+                border-color 1.2s cubic-bezier(0.4, 0, 0.2, 1),
+                color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 1000;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.theme-toggle:hover {
+    background: rgba(44, 47, 51, 0.3);
+    transform: scale(1.1);
+    box-shadow: 0 6px 30px rgba(0, 0, 0, 0.15);
+}
+
+.theme-toggle:active {
+    transform: scale(0.95);
+}
+
+/* Тёмная тема */
+.home-container.dark-theme {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.home-container.dark-theme .hero-content h1,
+.home-container.dark-theme .hero-subtitle {
+    color: white;
+}
+
+.home-container.dark-theme .features-section {
+    background: #2c2f33;
+    color: #dcddde;
+}
+
+.home-container.dark-theme .section-title {
+    color: #dcddde;
+}
+
+.home-container.dark-theme .feature-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.home-container.dark-theme .feature-card:hover {
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.home-container.dark-theme .feature-card h3 {
+    color: #dcddde;
+}
+
+.home-container.dark-theme .feature-card p {
+    color: #b9bbbe;
+}
+
+.home-container.dark-theme .cta-section {
+    background: #23272a;
+}
+
+.home-container.dark-theme .cta-section h2 {
+    color: #dcddde;
+}
+
+.home-container.dark-theme .cta-section p {
+    color: #b9bbbe;
+}
+
+.home-container.dark-theme .preview-window {
+    background: #36393f;
+}
+
+.home-container.dark-theme .preview-sidebar {
+    background: #202225;
+}
+
+.home-container.dark-theme .preview-message {
+    background: #2f3136;
+}
+
+.home-container.dark-theme .theme-toggle {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.3);
+    color: white;
+}
+
+.home-container.dark-theme .theme-toggle:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Анимация лопающегося пузыря */
+.bubble-animation {
+    position: fixed;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0;
+    transform: scale(0);
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.4) 50%, transparent 100%);
+    mix-blend-mode: overlay;
+    will-change: transform, opacity;
+}
+
+.bubble-animation.active {
+    animation: bubblePop 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes bubblePop {
+    0% {
+        transform: scale(0);
+        opacity: 0.8;
+    }
+    50% {
+        transform: scale(1.5);
+        opacity: 0.6;
+    }
+    100% {
+        transform: scale(3);
+        opacity: 0;
+    }
+}
+
+/* Плавные переходы для кнопок */
+.btn {
+    transition: background-color 1.2s cubic-bezier(0.4, 0, 0.2, 1),
+                color 1.2s cubic-bezier(0.4, 0, 0.2, 1),
+                border-color 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+</style>
+
+<script>
+// Переключение темы с анимацией пузыря
+document.addEventListener('DOMContentLoaded', function() {
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    const homeContainer = document.getElementById('home-container');
+    const bubbleAnimation = document.getElementById('bubble-animation');
+    
+    // Загрузить сохранённую тему (по умолчанию светлая)
+    const savedTheme = localStorage.getItem('home-theme') || 'light';
+    if (savedTheme === 'dark') {
+        homeContainer.classList.add('dark-theme');
+        themeIcon.className = 'fas fa-moon';
+    } else {
+        themeIcon.className = 'fas fa-sun';
+    }
+    
+    themeToggle.addEventListener('click', function(e) {
+        const rect = themeToggle.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        
+        // Создать анимацию пузыря от точки клика
+        bubbleAnimation.style.left = x + 'px';
+        bubbleAnimation.style.top = y + 'px';
+        bubbleAnimation.style.width = '20px';
+        bubbleAnimation.style.height = '20px';
+        bubbleAnimation.style.marginLeft = '-10px';
+        bubbleAnimation.style.marginTop = '-10px';
+        
+        // Запустить анимацию
+        bubbleAnimation.classList.remove('active');
+        void bubbleAnimation.offsetWidth; // Принудительный reflow
+        bubbleAnimation.classList.add('active');
+        
+        // Переключить тему после небольшой задержки
+        setTimeout(() => {
+            const isDark = homeContainer.classList.contains('dark-theme');
+            
+            if (isDark) {
+                // Переключить на светлую
+                homeContainer.classList.remove('dark-theme');
+                themeIcon.className = 'fas fa-sun';
+                localStorage.setItem('home-theme', 'light');
+            } else {
+                // Переключить на тёмную
+                homeContainer.classList.add('dark-theme');
+                themeIcon.className = 'fas fa-moon';
+                localStorage.setItem('home-theme', 'dark');
+            }
+        }, 100);
+        
+        // Убрать класс анимации после завершения
+        setTimeout(() => {
+            bubbleAnimation.classList.remove('active');
+        }, 1200);
+    });
+});
+</script>
+{% endblock %}
+

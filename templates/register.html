@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Регистрация - Discord Russia{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-box">
+        <h1>Создать аккаунт</h1>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <form method="POST" class="auth-form">
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" name="email" required autofocus>
+            </div>
+            
+            <div class="form-group">
+                <label>Имя пользователя</label>
+                <input type="text" name="username" required minlength="2" maxlength="32">
+            </div>
+            
+            <div class="form-group">
+                <label>Пароль</label>
+                <input type="password" name="password" required minlength="6">
+            </div>
+            
+            <button type="submit" class="btn btn-primary btn-block">Продолжить</button>
+        </form>
+        
+        <p class="auth-footer">
+            Уже есть аккаунт? <a href="{{ url_for('login') }}">Войти</a>
+        </p>
+    </div>
+</div>
+{% endblock %}
