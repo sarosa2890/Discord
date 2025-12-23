@@ -1678,6 +1678,9 @@ def handle_webrtc_end_call(data):
             'from_user_id': current_user.id
         }, room=online_users[target_user_id])
 
-if __name__ == '__main__':
-    socketio.run(app, debug=True, host='127.0.0.1', port=5000)
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000))
+    )
 
