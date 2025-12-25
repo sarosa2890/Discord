@@ -10,6 +10,8 @@ class WebRTCManager {
         this.targetUserId = null;
         this.pendingOffer = null;
         this.pendingIceCandidates = []; // Кэш для ICE кандидатов до установки remote description
+        this.iceCandidateQueue = []; // Очередь для батчинга ICE кандидатов
+        this.iceCandidateTimer = null; // Таймер для отправки батча
         
         this.setupSocketListeners();
         // Peer connection будет создан при начале звонка
@@ -46,11 +48,18 @@ class WebRTCManager {
         
         this.peerConnection.onicecandidate = (event) => {
             if (event.candidate && this.targetUserId) {
-                console.log('Sending ICE candidate:', event.candidate);
-                this.socket.emit('webrtc_ice_candidate', {
-                    target_user_id: this.targetUserId,
-                    candidate: event.candidate
-                });
+                // Батчинг ICE кандидатов для снижения сетевой нагрузки
+                this.iceCandidateQueue.push(event.candidate);
+                
+                // Отправляем батч каждые 500мс или при накоплении 5 кандидатов
+                clearTimeout(this.iceCandidateTimer);
+                if (this.iceCandidateQueue.length >= 5) {
+                    this.sendIceCandidateBatch();
+                } else {
+                    this.iceCandidateTimer = setTimeout(() => {
+                        this.sendIceCandidateBatch();
+                    }, 500);
+                }
             }
         };
         
@@ -258,18 +267,21 @@ class WebRTCManager {
     }
     
     async handleIceCandidate(data) {
-        if (data.candidate) {
-            console.log('Received ICE candidate:', data.candidate);
-            
-            // Если remote description ещё не установлен, кэшируем кандидата
-            if (!this.peerConnection || this.peerConnection.remoteDescription === null) {
-                console.log('Remote description not set yet, caching ICE candidate');
-                this.pendingIceCandidates.push(data.candidate);
-                return;
-            }
-            
+        // Поддержка батчинга кандидатов
+        const candidates = data.candidates || (data.candidate ? [data.candidate] : []);
+        if (candidates.length === 0) return;
+        
+        // Если remote description ещё не установлен, кэшируем кандидаты
+        if (!this.peerConnection || this.peerConnection.remoteDescription === null) {
+            console.log('Remote description not set yet, caching ICE candidates');
+            this.pendingIceCandidates.push(...candidates);
+            return;
+        }
+        
+        // Добавляем все кандидаты
+        for (const candidate of candidates) {
             try {
-                await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
                 console.log('ICE candidate added successfully');
             } catch (error) {
                 console.error('Error adding ICE candidate:', error);
@@ -425,6 +437,23 @@ class WebRTCManager {
         }
         
         this.targetUserId = null;
+        
+        // Очищаем очередь ICE кандидатов
+        this.iceCandidateQueue = [];
+        clearTimeout(this.iceCandidateTimer);
+    }
+    
+    // Отправка батча ICE кандидатов для оптимизации сети
+    sendIceCandidateBatch() {
+        if (this.iceCandidateQueue.length === 0 || !this.targetUserId) return;
+        
+        // Отправляем все кандидаты одним запросом
+        this.socket.emit('webrtc_ice_candidate', {
+            target_user_id: this.targetUserId,
+            candidates: this.iceCandidateQueue // Отправляем массив вместо одного
+        });
+        
+        this.iceCandidateQueue = [];
     }
     
     toggleMute() {

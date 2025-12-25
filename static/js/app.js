@@ -21,6 +21,21 @@ class DiscordApp {
         this.incomingCall = null;
         this.reactingToMessage = null;
         
+        // Кэш для оптимизации сетевых запросов
+        this.cache = {
+            friends: { data: null, timestamp: 0, ttl: 60000 }, // 1 минута
+            friendRequests: { data: null, timestamp: 0, ttl: 30000 }, // 30 секунд
+            servers: { data: null, timestamp: 0, ttl: 120000 }, // 2 минуты
+            channels: {}, // Кэш по server_id
+            messages: {}, // Кэш по channel_id
+            user: { data: null, timestamp: 0, ttl: 300000 } // 5 минут
+        };
+        
+        // Дебаунсинг для typing
+        this.typingDebounce = null;
+        this.lastTypingEmit = 0;
+        this.typingEmitInterval = 2000; // Отправлять не чаще раза в 2 секунды
+        
         this.init();
     }
     
@@ -28,14 +43,48 @@ class DiscordApp {
         // Убеждаемся, что модальное окно настроек закрыто
         this.closeModal();
         
-        await this.loadUser();
+        // Оптимизация: загружаем пользователя и начальные данные параллельно
+        await Promise.all([
+            this.loadUser(),
+            this.loadInitialData()
+        ]);
+        
         this.initSocket();
         await this.loadServers();
         this.setupEventListeners();
         this.initWebRTC();
-        await this.loadFriends();
-        await this.loadFriendRequests();
         this.showDMs();
+    }
+    
+    // Объединенный запрос для начальных данных (оптимизация сети)
+    async loadInitialData() {
+        try {
+            const response = await fetch('/api/user/initial-data');
+            if (response.ok) {
+                const data = await response.json();
+                this.friends = data.friends || [];
+                this.friendRequests = data.friend_requests || [];
+                
+                // Обновляем кэш
+                this.cache.friends.data = this.friends;
+                this.cache.friends.timestamp = Date.now();
+                this.cache.friendRequests.data = this.friendRequests;
+                this.cache.friendRequests.timestamp = Date.now();
+            } else {
+                // Fallback на отдельные запросы
+                await Promise.all([
+                    this.loadFriends(),
+                    this.loadFriendRequests()
+                ]);
+            }
+        } catch (error) {
+            console.error('Error loading initial data:', error);
+            // Fallback на отдельные запросы
+            await Promise.all([
+                this.loadFriends(),
+                this.loadFriendRequests()
+            ]);
+        }
     }
     
     initWebRTC() {
@@ -66,22 +115,42 @@ class DiscordApp {
         }
     }
     
-    async loadFriends() {
+    async loadFriends(force = false) {
+        // Проверяем кэш
+        if (!force && this.cache.friends.data && 
+            (Date.now() - this.cache.friends.timestamp) < this.cache.friends.ttl) {
+            this.friends = this.cache.friends.data;
+            return;
+        }
+        
         try {
             const response = await fetch('/api/friends');
             if (response.ok) {
                 this.friends = await response.json();
+                // Обновляем кэш
+                this.cache.friends.data = this.friends;
+                this.cache.friends.timestamp = Date.now();
             }
         } catch (error) {
             console.error('Error loading friends:', error);
         }
     }
     
-    async loadFriendRequests() {
+    async loadFriendRequests(force = false) {
+        // Проверяем кэш
+        if (!force && this.cache.friendRequests.data && 
+            (Date.now() - this.cache.friendRequests.timestamp) < this.cache.friendRequests.ttl) {
+            this.friendRequests = this.cache.friendRequests.data;
+            return;
+        }
+        
         try {
             const response = await fetch('/api/friends/requests');
             if (response.ok) {
                 this.friendRequests = await response.json();
+                // Обновляем кэш
+                this.cache.friendRequests.data = this.friendRequests;
+                this.cache.friendRequests.timestamp = Date.now();
             }
         } catch (error) {
             console.error('Error loading friend requests:', error);
@@ -286,11 +355,22 @@ class DiscordApp {
         }
     }
     
-    async loadServers() {
+    async loadServers(force = false) {
+        // Проверяем кэш
+        if (!force && this.cache.servers.data && 
+            (Date.now() - this.cache.servers.timestamp) < this.cache.servers.ttl) {
+            this.servers = this.cache.servers.data;
+            this.renderServers();
+            return;
+        }
+        
         try {
             const response = await fetch('/api/servers');
             if (response.ok) {
                 this.servers = await response.json();
+                // Обновляем кэш
+                this.cache.servers.data = this.servers;
+                this.cache.servers.timestamp = Date.now();
                 this.renderServers();
             }
         } catch (error) {
@@ -475,14 +555,33 @@ class DiscordApp {
         await this.loadMembers();
     }
     
-    async loadMessages() {
+    async loadMessages(force = false) {
         if (!this.currentChannel) return;
         
+        const channelId = this.currentChannel.id;
+        const cacheKey = `channel_${channelId}`;
+        
+        // Проверяем кэш (TTL 30 секунд для сообщений)
+        if (!force && this.cache.messages[cacheKey] && 
+            (Date.now() - this.cache.messages[cacheKey].timestamp) < 30000) {
+            this.messages = this.cache.messages[cacheKey].data;
+            this.renderMessages();
+            this.scrollToBottom();
+            return;
+        }
+        
         try {
-            const response = await fetch(`/api/channels/${this.currentChannel.id}/messages?limit=50`);
+            const response = await fetch(`/api/channels/${channelId}/messages?limit=50`);
             if (response.ok) {
-                this.messages = await response.json();
+                const messages = await response.json();
+                this.messages = messages;
+                // Обновляем кэш
+                this.cache.messages[cacheKey] = {
+                    data: messages,
+                    timestamp: Date.now()
+                };
                 this.renderMessages();
+                this.scrollToBottom();
             }
         } catch (error) {
             console.error('Error loading messages:', error);
@@ -644,6 +743,14 @@ class DiscordApp {
     }
     
     addMessage(message) {
+        // Обновляем кэш
+        if (this.currentChannel && message.channel_id === this.currentChannel.id) {
+            const cacheKey = `channel_${message.channel_id}`;
+            if (this.cache.messages[cacheKey]) {
+                this.cache.messages[cacheKey].data.push(message);
+                this.cache.messages[cacheKey].timestamp = Date.now();
+            }
+        }
         const container = document.getElementById('messages-container');
         if (!container) return;
         
@@ -679,6 +786,18 @@ class DiscordApp {
                 this.messages[index] = message;
             }
         }
+        
+        // Обновляем кэш
+        if (this.currentChannel) {
+            const cacheKey = `channel_${this.currentChannel.id}`;
+            if (this.cache.messages[cacheKey]) {
+                const cacheIndex = this.cache.messages[cacheKey].data.findIndex(m => m.id === message.id);
+                if (cacheIndex !== -1) {
+                    this.cache.messages[cacheKey].data[cacheIndex] = message;
+                    this.cache.messages[cacheKey].timestamp = Date.now();
+                }
+            }
+        }
     }
     
     removeMessage(messageId) {
@@ -688,6 +807,15 @@ class DiscordApp {
         }
         
         this.messages = this.messages.filter(m => m.id !== messageId);
+        
+        // Обновляем кэш
+        if (this.currentChannel) {
+            const cacheKey = `channel_${this.currentChannel.id}`;
+            if (this.cache.messages[cacheKey]) {
+                this.cache.messages[cacheKey].data = this.cache.messages[cacheKey].data.filter(m => m.id !== messageId);
+                this.cache.messages[cacheKey].timestamp = Date.now();
+            }
+        }
     }
     
     scrollToBottom() {
@@ -745,8 +873,18 @@ class DiscordApp {
     handleTyping() {
         if (!this.currentChannel && !this.currentDM) return;
         
+        // Дебаунсинг: отправляем typing не чаще раза в 2 секунды
+        const now = Date.now();
+        if (now - this.lastTypingEmit < this.typingEmitInterval) {
+            clearTimeout(this.typingDebounce);
+            this.typingDebounce = setTimeout(() => this.handleTyping(), 
+                this.typingEmitInterval - (now - this.lastTypingEmit));
+            return;
+        }
+        
         if (this.currentChannel && this.socket) {
             this.socket.emit('typing', { channel_id: this.currentChannel.id });
+            this.lastTypingEmit = now;
         }
         
         clearTimeout(this.typingTimeout);

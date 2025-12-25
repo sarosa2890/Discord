@@ -17,8 +17,14 @@ class Database:
         self.init_db()
     
     def get_connection(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        # Включаем WAL mode для лучшей производительности и меньшей блокировки
+        conn.execute('PRAGMA journal_mode=WAL')
+        # Оптимизация для Render.com - уменьшаем частоту синхронизации
+        conn.execute('PRAGMA synchronous=NORMAL')
+        conn.execute('PRAGMA cache_size=-64000')  # 64MB кэш
+        conn.execute('PRAGMA temp_store=MEMORY')
         return conn
     
     def init_db(self):
@@ -135,22 +141,79 @@ class UsersDB(Database):
                 )
             ''')
             
+            # Создаём индексы для ускорения запросов
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id 
+                ON user_sessions(user_id)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_user_sessions_session_id 
+                ON user_sessions(session_id)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_user_sessions_last_activity 
+                ON user_sessions(user_id, last_activity DESC)
+            ''')
+            
             conn.commit()
         finally:
             conn.close()
     
     def create_session(self, user_id, session_id, device_name=None, user_agent=None, ip_address=None):
-        """Создать новую сессию/устройство"""
-        # Помечаем все предыдущие сессии как не текущие
-        self.execute('''
-            UPDATE user_sessions SET is_current = 0 WHERE user_id = ?
-        ''', (user_id,))
-        
-        # Создаём новую сессию
-        self.execute('''
-            INSERT INTO user_sessions (user_id, session_id, device_name, user_agent, ip_address, is_current)
-            VALUES (?, ?, ?, ?, ?, 1)
-        ''', (user_id, session_id, device_name, user_agent, ip_address))
+        """Создать или обновить сессию/устройство (оптимизировано)"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Используем транзакцию для всех операций
+            # Проверяем, существует ли уже сессия с таким session_id
+            cursor.execute('''
+                SELECT id FROM user_sessions WHERE session_id = ?
+            ''', (session_id,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Обновляем существующую сессию
+                cursor.execute('''
+                    UPDATE user_sessions 
+                    SET is_current = 1, 
+                        last_activity = CURRENT_TIMESTAMP,
+                        ip_address = ?
+                    WHERE session_id = ?
+                ''', (ip_address, session_id))
+            else:
+                # Помечаем все предыдущие сессии как не текущие (только если создаем новую)
+                cursor.execute('''
+                    UPDATE user_sessions SET is_current = 0 WHERE user_id = ?
+                ''', (user_id,))
+                
+                # Создаём новую сессию
+                cursor.execute('''
+                    INSERT INTO user_sessions (user_id, session_id, device_name, user_agent, ip_address, is_current)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                ''', (user_id, session_id, device_name, user_agent, ip_address))
+            
+            # Очищаем старые сессии (оставляем только последние 20 для каждого пользователя)
+            # Получаем ID последних 20 сессий
+            cursor.execute('''
+                SELECT id FROM user_sessions 
+                WHERE user_id = ? 
+                ORDER BY last_activity DESC 
+                LIMIT 20
+            ''', (user_id,))
+            keep_ids = [row[0] for row in cursor.fetchall()]
+            
+            if keep_ids:
+                # Формируем плейсхолдеры для IN
+                placeholders = ','.join(['?'] * len(keep_ids))
+                cursor.execute(f'''
+                    DELETE FROM user_sessions 
+                    WHERE user_id = ? AND id NOT IN ({placeholders})
+                ''', (user_id, *keep_ids))
+            
+            conn.commit()
+        finally:
+            conn.close()
     
     def get_user_sessions(self, user_id):
         """Получить все сессии пользователя"""
@@ -286,6 +349,24 @@ class ChatsDB(Database):
                 )
             ''')
             
+            # Создаём индексы для ускорения запросов
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_messages_channel_id 
+                ON messages(channel_id, created_at DESC)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_messages_author_id 
+                ON messages(author_id)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_attachments_message_id 
+                ON attachments(message_id)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_reactions_message_id 
+                ON reactions(message_id)
+            ''')
+            
             # Таблица личных сообщений
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS direct_messages (
@@ -298,16 +379,45 @@ class ChatsDB(Database):
                 )
             ''')
             
+            # Индексы для личных сообщений
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_dm_users 
+                ON direct_messages(sender_id, receiver_id, created_at DESC)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_dm_receiver_unread 
+                ON direct_messages(receiver_id, is_read)
+            ''')
+            
             conn.commit()
         finally:
             conn.close()
     
-    def create_message(self, content, author_id, channel_id, reply_to_id=None):
-        message_id = self.execute('''
-            INSERT INTO messages (content, author_id, channel_id, reply_to_id)
-            VALUES (?, ?, ?, ?)
-        ''', (content, author_id, channel_id, reply_to_id))
-        return message_id
+    def create_message(self, content, author_id, channel_id, reply_to_id=None, attachments=None):
+        """Создать сообщение с возможностью добавления вложений в одной транзакции"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Создаём сообщение
+            cursor.execute('''
+                INSERT INTO messages (content, author_id, channel_id, reply_to_id)
+                VALUES (?, ?, ?, ?)
+            ''', (content, author_id, channel_id, reply_to_id))
+            message_id = cursor.lastrowid
+            
+            # Добавляем вложения в той же транзакции
+            if attachments:
+                for att in attachments:
+                    cursor.execute('''
+                        INSERT INTO attachments (filename, original_filename, file_type, file_size, message_id)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (att['filename'], att['original_filename'], att['file_type'], att['file_size'], message_id))
+            
+            conn.commit()
+            return message_id
+        finally:
+            conn.close()
     
     def get_message(self, message_id):
         return self.fetch_one('SELECT * FROM messages WHERE id = ?', (message_id,))

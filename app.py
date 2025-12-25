@@ -15,6 +15,9 @@ import qrcode
 from io import BytesIO
 import base64
 import json
+from functools import lru_cache
+from threading import Lock
+import time
 
 # ==================== НАСТРОЙКА ПРИЛОЖЕНИЯ ====================
 
@@ -42,6 +45,24 @@ login_manager.login_view = 'login'
 # Онлайн пользователи
 online_users = {}
 voice_channels = {}
+
+# Кэш для оптимизации нагрузки на Render.com (in-memory cache)
+server_cache = {
+    'users': {},  # user_id -> {data, timestamp}
+    'servers': {},  # user_id -> {data, timestamp}
+    'channels': {},  # server_id -> {data, timestamp}
+    'messages': {},  # channel_id -> {data, timestamp}
+    'friends': {},  # user_id -> {data, timestamp}
+    'lock': Lock()  # Блокировка для thread-safe доступа
+}
+
+CACHE_TTL = {
+    'users': 300,  # 5 минут
+    'servers': 120,  # 2 минуты
+    'channels': 60,  # 1 минута
+    'messages': 30,  # 30 секунд
+    'friends': 60  # 1 минута
+}
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mp3', 'wav', 'pdf', 'txt', 'zip'}
 
@@ -650,6 +671,25 @@ def resend_verification():
 def get_current_user():
     return jsonify(current_user.to_dict())
 
+@app.route('/api/user/initial-data')
+@login_required
+def get_initial_data():
+    """Оптимизированный endpoint для загрузки начальных данных одним запросом"""
+    friends = users_db.get_friends(current_user.id)
+    friend_requests = users_db.get_pending_requests(current_user.id)
+    
+    return jsonify({
+        'friends': [User(u).to_dict() for u in friends],
+        'friend_requests': [{
+            'id': req['id'],
+            'username': req['username'],
+            'discriminator': req['discriminator'],
+            'avatar': req['avatar'],
+            'status': req['status'],
+            'created_at': req['created_at']
+        } for req in friend_requests]
+    })
+
 @app.route('/api/user/<int:user_id>')
 @login_required
 def get_user(user_id):
@@ -825,10 +865,44 @@ def verify_2fa():
     return jsonify({'error': 'Неверный код'}), 400
 
 # Friends System
+def get_cached_data(cache_key, cache_type, fetch_func, *args):
+    """Универсальная функция кэширования для снижения нагрузки на БД"""
+    with server_cache['lock']:
+        now = time.time()
+        cache_entry = server_cache[cache_type].get(cache_key)
+        
+        if cache_entry and (now - cache_entry['timestamp']) < CACHE_TTL[cache_type]:
+            return cache_entry['data']
+        
+        # Получаем данные из БД
+        data = fetch_func(*args)
+        
+        # Сохраняем в кэш
+        server_cache[cache_type][cache_key] = {
+            'data': data,
+            'timestamp': now
+        }
+        
+        return data
+
 @app.route('/api/friends')
 @login_required
 def get_friends():
-    friends = current_user.get_friends()
+    # Используем кэш для снижения нагрузки на БД
+    cache_key = f"friends_{current_user.id}"
+    with server_cache['lock']:
+        now = time.time()
+        cache_entry = server_cache['friends'].get(cache_key)
+        
+        if cache_entry and (now - cache_entry['timestamp']) < CACHE_TTL['friends']:
+            friends = cache_entry['data']
+        else:
+            friends = current_user.get_friends()
+            server_cache['friends'][cache_key] = {
+                'data': friends,
+                'timestamp': now
+            }
+    
     return jsonify([f.to_dict() for f in friends])
 
 @app.route('/api/friends/requests')
@@ -893,6 +967,13 @@ def add_friend():
         VALUES (?, ?, ?)
     ''', (friend.id, 'friend_request', f'{current_user.username} хочет добавить вас в друзья'))
     
+    # Инвалидируем кэш друзей для обоих пользователей
+    for user_id in [current_user.id, friend.id]:
+        cache_key = f"friends_{user_id}"
+        with server_cache['lock']:
+            if cache_key in server_cache['friends']:
+                del server_cache['friends'][cache_key]
+    
     return jsonify({'success': True, 'message': 'Запрос отправлен'})
 
 @app.route('/api/friends/accept', methods=['POST'])
@@ -910,6 +991,13 @@ def accept_friend():
         return jsonify({'error': 'Запрос не найден'}), 404
     
     users_db.update_friendship(user_id, current_user.id, 'accepted')
+    
+    # Инвалидируем кэш друзей для обоих пользователей
+    for uid in [current_user.id, user_id]:
+        cache_key = f"friends_{uid}"
+        with server_cache['lock']:
+            if cache_key in server_cache['friends']:
+                del server_cache['friends'][cache_key]
     
     return jsonify({'success': True})
 
@@ -933,6 +1021,13 @@ def remove_friend():
     user_id = data.get('user_id')
     
     users_db.delete_friendship(current_user.id, user_id)
+    
+    # Инвалидируем кэш друзей для обоих пользователей
+    for uid in [current_user.id, user_id]:
+        cache_key = f"friends_{uid}"
+        with server_cache['lock']:
+            if cache_key in server_cache['friends']:
+                del server_cache['friends'][cache_key]
     
     return jsonify({'success': True})
 
@@ -976,7 +1071,21 @@ def get_audio_settings():
 @app.route('/api/servers')
 @login_required
 def get_servers():
-    servers = current_user.servers
+    # Используем кэш для снижения нагрузки на БД
+    cache_key = f"servers_{current_user.id}"
+    with server_cache['lock']:
+        now = time.time()
+        cache_entry = server_cache['servers'].get(cache_key)
+        
+        if cache_entry and (now - cache_entry['timestamp']) < CACHE_TTL['servers']:
+            servers = cache_entry['data']
+        else:
+            servers = current_user.servers
+            server_cache['servers'][cache_key] = {
+                'data': servers,
+                'timestamp': now
+            }
+    
     return jsonify([s.to_dict() for s in servers])
 
 @app.route('/api/servers/create', methods=['POST'])
@@ -993,6 +1102,12 @@ def create_server():
     groups_db.create_role('@everyone', server_id, 0)
     
     text_category_id = groups_db.create_category('Текстовые каналы', server_id, 0)
+    
+    # Инвалидируем кэш серверов
+    cache_key = f"servers_{current_user.id}"
+    with server_cache['lock']:
+        if cache_key in server_cache['servers']:
+            del server_cache['servers'][cache_key]
     voice_category_id = groups_db.create_category('Голосовые каналы', server_id, 1)
     
     groups_db.create_channel('общий', server_id, 'text', text_category_id)
@@ -1202,8 +1317,29 @@ def get_messages(channel_id):
     before = request.args.get('before', type=int)
     limit = min(request.args.get('limit', 50, type=int), 100)
     
+    # Кэшируем только стандартные запросы (без before и limit=50)
+    use_cache = before is None and limit == 50
+    cache_key = f"messages_{channel_id}_50"
+    
+    if use_cache:
+        with server_cache['lock']:
+            now = time.time()
+            cache_entry = server_cache['messages'].get(cache_key)
+            
+            if cache_entry and (now - cache_entry['timestamp']) < CACHE_TTL['messages']:
+                messages = cache_entry['data']
+                return jsonify(messages)
+    
     messages_data = chats_db.get_messages(channel_id, limit, before)
     messages = [Message(m).to_dict() for m in messages_data]
+    
+    # Сохраняем в кэш только стандартные запросы
+    if use_cache:
+        with server_cache['lock']:
+            server_cache['messages'][cache_key] = {
+                'data': messages,
+                'timestamp': time.time()
+            }
     
     return jsonify(messages)
 
@@ -1244,7 +1380,14 @@ def toggle_pin_message(message_id):
     chats_db.toggle_pin_message(message_id)
     
     message_data = chats_db.get_message(message_id)
-    socketio.emit('message_updated', Message(message_data).to_dict(), room=f'channel_{channel.id}')
+    message_dict = Message(message_data).to_dict()
+    socketio.emit('message_updated', message_dict, room=f'channel_{channel.id}')
+    
+    # Инвалидируем кэш сообщений
+    cache_key = f"messages_{channel.id}_50"
+    with server_cache['lock']:
+        if cache_key in server_cache['messages']:
+            del server_cache['messages'][cache_key]
     
     return jsonify(Message(message_data).to_dict())
 
@@ -1266,9 +1409,16 @@ def edit_message(message_id):
     chats_db.update_message(message_id, content)
     
     message_data = chats_db.get_message(message_id)
-    socketio.emit('message_updated', Message(message_data).to_dict(), room=f'channel_{message.channel_id}')
+    message_dict = Message(message_data).to_dict()
+    socketio.emit('message_updated', message_dict, room=f'channel_{message.channel_id}')
     
-    return jsonify(Message(message_data).to_dict())
+    # Инвалидируем кэш сообщений
+    cache_key = f"messages_{message.channel_id}_50"
+    with server_cache['lock']:
+        if cache_key in server_cache['messages']:
+            del server_cache['messages'][cache_key]
+    
+    return jsonify(message_dict)
 
 @app.route('/api/messages/<int:message_id>/delete', methods=['POST'])
 @login_required
@@ -1305,9 +1455,16 @@ def toggle_reaction(message_id):
     chats_db.toggle_reaction(message_id, current_user.id, emoji)
     
     message_data = chats_db.get_message(message_id)
-    socketio.emit('message_updated', Message(message_data).to_dict(), room=f'channel_{message.channel_id}')
+    message_dict = Message(message_data).to_dict()
+    socketio.emit('message_updated', message_dict, room=f'channel_{message.channel_id}')
     
-    return jsonify(Message(message_data).to_dict())
+    # Инвалидируем кэш сообщений
+    cache_key = f"messages_{message.channel_id}_50"
+    with server_cache['lock']:
+        if cache_key in server_cache['messages']:
+            del server_cache['messages'][cache_key]
+    
+    return jsonify(message_dict)
 
 # Загрузка файлов
 @app.route('/api/upload', methods=['POST'])
@@ -1462,19 +1619,24 @@ def handle_send_message(data):
     if not groups_db.is_server_member(current_user.id, server.id):
         return
     
-    message_id = chats_db.create_message(content, current_user.id, channel_id, reply_to_id)
-    
-    for att_data in attachments_data:
-        chats_db.add_attachment(
-            att_data['filename'],
-            att_data['original_filename'],
-            att_data['file_type'],
-            att_data['file_size'],
-            message_id
-        )
+    # Оптимизированное создание сообщения с вложениями в одной транзакции
+    message_id = chats_db.create_message(
+        content, 
+        current_user.id, 
+        channel_id, 
+        reply_to_id,
+        attachments=attachments_data if attachments_data else None
+    )
     
     message_data = chats_db.get_message(message_id)
-    emit('new_message', Message(message_data).to_dict(), room=f'channel_{channel_id}')
+    message_dict = Message(message_data).to_dict()
+    emit('new_message', message_dict, room=f'channel_{channel_id}')
+    
+    # Инвалидируем кэш сообщений для этого канала
+    cache_key = f"messages_{channel_id}_50"
+    with server_cache['lock']:
+        if cache_key in server_cache['messages']:
+            del server_cache['messages'][cache_key]
 
 @socketio.on('typing')
 def handle_typing(data):
@@ -1659,12 +1821,21 @@ def handle_webrtc_ice(data):
     
     target_user_id = data.get('target_user_id')
     candidate = data.get('candidate')
+    candidates = data.get('candidates')  # Поддержка батчинга
     
     if target_user_id in online_users:
-        emit('webrtc_ice_candidate', {
-            'from_user_id': current_user.id,
-            'candidate': candidate
-        }, room=online_users[target_user_id])
+        # Если передан массив кандидатов (батч), отправляем все сразу
+        if candidates:
+            emit('webrtc_ice_candidate', {
+                'from_user_id': current_user.id,
+                'candidates': candidates
+            }, room=online_users[target_user_id])
+        elif candidate:
+            # Обратная совместимость с одним кандидатом
+            emit('webrtc_ice_candidate', {
+                'from_user_id': current_user.id,
+                'candidate': candidate
+            }, room=online_users[target_user_id])
 
 @socketio.on('webrtc_end_call')
 def handle_webrtc_end_call(data):
@@ -1678,11 +1849,6 @@ def handle_webrtc_end_call(data):
             'from_user_id': current_user.id
         }, room=online_users[target_user_id])
 
-if __name__ == "__main__":
-    socketio.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 5000)),
-        debug=True
-    )
+if __name__ == '__main__':
+    socketio.run(app, debug=True, host='127.0.0.1', port=5000)
 
