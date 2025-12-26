@@ -1908,7 +1908,6 @@ def handle_webrtc_end_call(data):
         }, room=online_users[target_user_id])
 
 if __name__ == '__main__':
-<<<<<<< HEAD
     # Запускаем периодическую очистку старых соединений
     import threading
     def periodic_cleanup():
@@ -1937,9 +1936,6 @@ if __name__ == '__main__':
     cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
     cleanup_thread.start()
     
-    # Запускаем приложение
+    # Запускаем приложение (debug=False для production на Render.com)
     socketio.run(app, debug=False, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
-=======
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
->>>>>>> a8acbc6f391e9e48f7c2b39f42cfd00a222496b0
 
