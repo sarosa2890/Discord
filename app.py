@@ -1908,6 +1908,7 @@ def handle_webrtc_end_call(data):
         }, room=online_users[target_user_id])
 
 if __name__ == '__main__':
+<<<<<<< HEAD
     # Запускаем периодическую очистку старых соединений
     import threading
     def periodic_cleanup():
@@ -1938,4 +1939,7 @@ if __name__ == '__main__':
     
     # Запускаем приложение
     socketio.run(app, debug=False, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+=======
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+>>>>>>> a8acbc6f391e9e48f7c2b39f42cfd00a222496b0
 
