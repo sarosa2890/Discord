@@ -38,7 +38,17 @@ app.config['MAIL_PASSWORD'] = "NKC2aSOVELwbSASa26rh"
 app.config['MAIL_DEFAULT_SENDER'] = "sarosa2840@mail.ru"  # Отправитель по умолчанию
 
 mail = Mail(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Используем threading вместо eventlet для лучшей стабильности на Render.com
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*", 
+    async_mode='threading',
+    ping_timeout=60,
+    ping_interval=25,
+    max_http_buffer_size=1e6,  # 1MB
+    logger=False,
+    engineio_logger=False
+)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
@@ -665,6 +675,12 @@ def resend_verification():
             return jsonify({'error': error_msg}), 500
 
 # ==================== API ====================
+
+# Health check endpoint для Render.com
+@app.route('/health')
+def health_check():
+    """Health check endpoint для мониторинга Render.com"""
+    return jsonify({'status': 'ok', 'timestamp': datetime.utcnow().isoformat()}), 200
 
 @app.route('/api/user')
 @login_required
@@ -1552,37 +1568,79 @@ def search_users():
 
 @socketio.on('connect')
 def handle_connect():
-    if current_user.is_authenticated:
+    try:
+        if not current_user.is_authenticated:
+            return False  # Отклоняем неавторизованные соединения
+        
+        # Ограничиваем количество одновременных соединений для одного пользователя (макс 3)
+        user_sessions = [sid for uid, sid in online_users.items() if uid == current_user.id]
+        if len(user_sessions) >= 3:
+            return False  # Отклоняем соединение если слишком много
+        
         online_users[current_user.id] = request.sid
         
         # Сохраняем информацию о сессии/устройстве
-        user_agent = request.headers.get('User-Agent', 'Unknown')
-        ip_address = request.remote_addr
-        device_name = user_agent.split('(')[1].split(')')[0] if '(' in user_agent else 'Unknown Device'
-        users_db.create_session(current_user.id, request.sid, device_name, user_agent, ip_address)
+        try:
+            user_agent = request.headers.get('User-Agent', 'Unknown')[:200]  # Ограничиваем длину
+            ip_address = request.remote_addr or '0.0.0.0'
+            device_name = user_agent.split('(')[1].split(')')[0] if '(' in user_agent else 'Unknown Device'
+            device_name = device_name[:100]  # Ограничиваем длину
+            
+            users_db.create_session(current_user.id, request.sid, device_name, user_agent, ip_address)
+        except Exception as e:
+            print(f"Error creating session: {e}")
         
-        users_db.update_user(current_user.id, 
-                           status='online',
-                           last_seen=datetime.utcnow().isoformat())
-        current_user.status = 'online'
+        # Обновляем статус пользователя
+        try:
+            users_db.update_user(current_user.id, 
+                               status='online',
+                               last_seen=datetime.utcnow().isoformat())
+            current_user.status = 'online'
+        except:
+            pass
         
-        for server in current_user.servers:
-            join_room(f'server_{server.id}')
-            emit('user_online', current_user.to_dict(), room=f'server_{server.id}')
+        # Уведомляем серверы о подключении
+        try:
+            for server in current_user.servers:
+                join_room(f'server_{server.id}')
+                emit('user_online', current_user.to_dict(), room=f'server_{server.id}')
+        except:
+            pass
+    except Exception as e:
+        print(f"Error in handle_connect: {e}")
+        return False
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    if current_user.is_authenticated:
-        if current_user.id in online_users:
-            del online_users[current_user.id]
-        
-        users_db.update_user(current_user.id,
-                           status='offline',
-                           last_seen=datetime.utcnow().isoformat())
-        current_user.status = 'offline'
-        
-        for server in current_user.servers:
-            emit('user_offline', {'id': current_user.id}, room=f'server_{server.id}')
+    try:
+        if current_user.is_authenticated:
+            # Удаляем из онлайн пользователей
+            if current_user.id in online_users:
+                del online_users[current_user.id]
+            
+            # Удаляем сессию из БД
+            try:
+                users_db.delete_session(request.sid, current_user.id)
+            except:
+                pass  # Игнорируем ошибки при удалении сессии
+            
+            # Обновляем статус пользователя
+            try:
+                users_db.update_user(current_user.id,
+                                   status='offline',
+                                   last_seen=datetime.utcnow().isoformat())
+                current_user.status = 'offline'
+            except:
+                pass
+            
+            # Уведомляем серверы об отключении
+            try:
+                for server in current_user.servers:
+                    emit('user_offline', {'id': current_user.id}, room=f'server_{server.id}')
+            except:
+                pass
+    except:
+        pass  # Игнорируем все ошибки при disconnect для стабильности
 
 @socketio.on('join_channel')
 def handle_join_channel(data):
@@ -1850,5 +1908,34 @@ def handle_webrtc_end_call(data):
         }, room=online_users[target_user_id])
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='127.0.0.1', port=5000)
+    # Запускаем периодическую очистку старых соединений
+    import threading
+    def periodic_cleanup():
+        import time
+        while True:
+            time.sleep(3600)  # Каждый час
+            try:
+                # Удаляем старые сессии из БД (старше 7 дней)
+                users_db.execute('''
+                    DELETE FROM user_sessions 
+                    WHERE last_activity < datetime('now', '-7 days')
+                ''')
+                
+                # Очищаем кэш если он слишком большой (более 1000 записей)
+                with server_cache['lock']:
+                    for cache_type in ['users', 'servers', 'channels', 'messages', 'friends']:
+                        if len(server_cache[cache_type]) > 1000:
+                            # Удаляем самые старые записи
+                            items = list(server_cache[cache_type].items())
+                            items.sort(key=lambda x: x[1]['timestamp'])
+                            # Оставляем только последние 500
+                            server_cache[cache_type] = dict(items[-500:])
+            except:
+                pass
+    
+    cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
+    cleanup_thread.start()
+    
+    # Запускаем приложение
+    socketio.run(app, debug=False, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
 

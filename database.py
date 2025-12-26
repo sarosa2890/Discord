@@ -193,13 +193,13 @@ class UsersDB(Database):
                     VALUES (?, ?, ?, ?, ?, 1)
                 ''', (user_id, session_id, device_name, user_agent, ip_address))
             
-            # Очищаем старые сессии (оставляем только последние 20 для каждого пользователя)
-            # Получаем ID последних 20 сессий
+            # Очищаем старые сессии (оставляем только последние 5 для каждого пользователя для экономии ресурсов)
+            # Получаем ID последних 5 сессий
             cursor.execute('''
                 SELECT id FROM user_sessions 
                 WHERE user_id = ? 
                 ORDER BY last_activity DESC 
-                LIMIT 20
+                LIMIT 5
             ''', (user_id,))
             keep_ids = [row[0] for row in cursor.fetchall()]
             
