@@ -445,8 +445,8 @@ class DirectMessage:
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def send_verification_email(user, mail):
-    """Отправка email для подтверждения"""
+def send_verification_email(user, mail, async_send=True):
+    """Отправка email для подтверждения (асинхронно, чтобы не блокировать приложение)"""
     # Проверяем настройки email
     if app.config['MAIL_USERNAME'] == 'your-email@gmail.com' or app.config['MAIL_PASSWORD'] == 'your-password':
         print(f"⚠️ EMAIL НЕ НАСТРОЕН! Установите переменные окружения MAIL_USERNAME и MAIL_PASSWORD")
@@ -457,74 +457,99 @@ def send_verification_email(user, mail):
     
     verification_url = url_for('verify_email', token=token, _external=True)
     
-    try:
-        # Используем MailMessage вместо Message, чтобы избежать конфликта с классом Message
-        msg = MailMessage(
-            subject='Подтверждение email - Discord Russia',
-            sender=app.config.get('MAIL_DEFAULT_SENDER', app.config['MAIL_USERNAME']),
-            recipients=[user.email],
-            html=f'''
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <h2 style="color: #5865F2;">Подтвердите ваш email</h2>
-                <p>Здравствуйте!</p>
-                <p>Для подтверждения вашего email адреса <strong>{user.email}</strong> нажмите на кнопку ниже:</p>
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="{verification_url}" style="display: inline-block; padding: 12px 24px; background: #5865F2; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">Подтвердить email</a>
-                </div>
-                <p>Или скопируйте эту ссылку в браузер:</p>
-                <p style="word-break: break-all; color: #5865F2;">{verification_url}</p>
-                <p style="color: #999; font-size: 12px;">Ссылка действительна 24 часа.</p>
-                <p style="color: #999; font-size: 12px;">Если вы не регистрировались на этом сайте, проигнорируйте это письмо.</p>
-            </div>
-            '''
-        )
-        print(f"Попытка отправки email на {user.email} через {app.config['MAIL_SERVER']}:{app.config['MAIL_PORT']}")
-        mail.send(msg)
-        print(f"✓ Email отправлен на {user.email}")
-        return True
-    except Exception as e:
-        error_msg = str(e)
-        print(f"✗ Ошибка отправки email: {e}")
-        print(f"   Проверьте настройки SMTP в app.py")
-        print(f"   MAIL_USERNAME: {app.config['MAIL_USERNAME']}")
-        print(f"   MAIL_SERVER: {app.config['MAIL_SERVER']}")
-        print(f"   MAIL_PORT: {app.config['MAIL_PORT']}")
-        
-        # Специфичные сообщения для разных ошибок
-        mail_server = app.config.get('MAIL_SERVER', '').lower()
-        
-        if 'authentication failed' in error_msg.lower() or '535' in error_msg or 'access rights' in error_msg.lower():
-            print(f"\n   ⚠️ ОШИБКА АУТЕНТИФИКАЦИИ!")
-            if 'mail.ru' in mail_server:
-                print(f"   Для Mail.ru:")
-                print(f"   1. Убедитесь, что используете полный email (с @mail.ru)")
-                print(f"   2. Проверьте правильность пароля")
-                print(f"   3. Попробуйте войти в почту через браузер для проверки пароля")
-                print(f"   4. Убедитесь, что двухфакторная аутентификация не блокирует доступ")
-            elif 'yandex' in mail_server:
-                print(f"   Для Yandex нужно:")
-                print(f"   1. Включить доступ для сторонних приложений:")
-                print(f"      https://id.yandex.ru/security")
-                print(f"      → Включите 'Доступ по паролю для приложений'")
-                print(f"   2. ИЛИ используйте пароль приложения (облачный пароль):")
-                print(f"      https://id.yandex.ru/security/app-passwords")
-                print(f"      → Создайте пароль для 'Почта'")
-                print(f"   3. Убедитесь, что используете правильный пароль")
+    def _send_email():
+        """Внутренняя функция для отправки email"""
+        try:
+            # Устанавливаем таймаут только для SMTP соединений (чтобы не зависать на Render.com)
+            import socket
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(10)  # 10 секунд таймаут для SMTP
+            
+            try:
+                # Используем MailMessage вместо Message, чтобы избежать конфликта с классом Message
+                msg = MailMessage(
+                    subject='Подтверждение email - Discord Russia',
+                    sender=app.config.get('MAIL_DEFAULT_SENDER', app.config['MAIL_USERNAME']),
+                    recipients=[user.email],
+                    html=f'''
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2 style="color: #5865F2;">Подтвердите ваш email</h2>
+                        <p>Здравствуйте!</p>
+                        <p>Для подтверждения вашего email адреса <strong>{user.email}</strong> нажмите на кнопку ниже:</p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="{verification_url}" style="display: inline-block; padding: 12px 24px; background: #5865F2; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">Подтвердить email</a>
+                        </div>
+                        <p>Или скопируйте эту ссылку в браузер:</p>
+                        <p style="word-break: break-all; color: #5865F2;">{verification_url}</p>
+                        <p style="color: #999; font-size: 12px;">Ссылка действительна 24 часа.</p>
+                        <p style="color: #999; font-size: 12px;">Если вы не регистрировались на этом сайте, проигнорируйте это письмо.</p>
+                    </div>
+                    '''
+                )
+                print(f"Попытка отправки email на {user.email} через {app.config['MAIL_SERVER']}:{app.config['MAIL_PORT']}")
+                # Используем контекст приложения для отправки email
+                with app.app_context():
+                    mail.send(msg)
+                print(f"✓ Email отправлен на {user.email}")
+                return True
+            finally:
+                # Восстанавливаем старый таймаут
+                socket.setdefaulttimeout(old_timeout)
+        except Exception as e:
+            error_msg = str(e)
+            print(f"✗ Ошибка отправки email: {e}")
+            print(f"   Проверьте настройки SMTP в app.py")
+            print(f"   MAIL_USERNAME: {app.config['MAIL_USERNAME']}")
+            print(f"   MAIL_SERVER: {app.config['MAIL_SERVER']}")
+            print(f"   MAIL_PORT: {app.config['MAIL_PORT']}")
+            
+            # Специфичные сообщения для разных ошибок
+            mail_server = app.config.get('MAIL_SERVER', '').lower()
+            
+            if 'authentication failed' in error_msg.lower() or '535' in error_msg or 'access rights' in error_msg.lower():
+                print(f"\n   ⚠️ ОШИБКА АУТЕНТИФИКАЦИИ!")
+                if 'mail.ru' in mail_server:
+                    print(f"   Для Mail.ru:")
+                    print(f"   1. Убедитесь, что используете полный email (с @mail.ru)")
+                    print(f"   2. Проверьте правильность пароля")
+                    print(f"   3. Попробуйте войти в почту через браузер для проверки пароля")
+                    print(f"   4. Убедитесь, что двухфакторная аутентификация не блокирует доступ")
+                elif 'yandex' in mail_server:
+                    print(f"   Для Yandex нужно:")
+                    print(f"   1. Включить доступ для сторонних приложений:")
+                    print(f"      https://id.yandex.ru/security")
+                    print(f"      → Включите 'Доступ по паролю для приложений'")
+                    print(f"   2. ИЛИ используйте пароль приложения (облачный пароль):")
+                    print(f"      https://id.yandex.ru/security/app-passwords")
+                    print(f"      → Создайте пароль для 'Почта'")
+                    print(f"   3. Убедитесь, что используете правильный пароль")
+                else:
+                    print(f"   1. Проверьте правильность email и пароля")
+                    print(f"   2. Убедитесь, что используете полный email")
+            elif 'connection' in error_msg.lower() or 'timeout' in error_msg.lower():
+                print(f"   ⚠️ Ошибка подключения. Проверьте интернет-соединение и настройки порта.")
+                if 'mail.ru' in mail_server:
+                    print(f"   Для Mail.ru попробуйте:")
+                    print(f"   - Порт 465 с SSL (MAIL_USE_SSL = True, MAIL_USE_TLS = False)")
+                    print(f"   - ИЛИ порт 587 с TLS (MAIL_USE_TLS = True, MAIL_USE_SSL = False)")
+            elif '550' in error_msg or '553' in error_msg:
+                print(f"   ⚠️ Ошибка адреса получателя. Проверьте правильность email получателя.")
             else:
-                print(f"   1. Проверьте правильность email и пароля")
-                print(f"   2. Убедитесь, что используете полный email")
-        elif 'connection' in error_msg.lower() or 'timeout' in error_msg.lower():
-            print(f"   ⚠️ Ошибка подключения. Проверьте интернет-соединение и настройки порта.")
-            if 'mail.ru' in mail_server:
-                print(f"   Для Mail.ru попробуйте:")
-                print(f"   - Порт 465 с SSL (MAIL_USE_SSL = True, MAIL_USE_TLS = False)")
-                print(f"   - ИЛИ порт 587 с TLS (MAIL_USE_TLS = True, MAIL_USE_SSL = False)")
-        elif '550' in error_msg or '553' in error_msg:
-            print(f"   ⚠️ Ошибка адреса получателя. Проверьте правильность email получателя.")
-        else:
-            print(f"   Полная ошибка: {error_msg}")
-        
-        return False
+                print(f"   Полная ошибка: {error_msg}")
+            
+            return False
+    
+    # Если async_send=True, отправляем в отдельном потоке (не блокирует приложение)
+    if async_send:
+        import threading
+        thread = threading.Thread(target=_send_email, daemon=True)
+        thread.start()
+        # Возвращаем True сразу, чтобы не блокировать запрос
+        # Email будет отправлен в фоне
+        return True
+    else:
+        # Синхронная отправка (для тестирования)
+        return _send_email()
 
 @login_manager.user_loader
 def load_user(user_id):
